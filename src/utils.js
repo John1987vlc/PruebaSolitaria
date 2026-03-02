@@ -1,11 +1,9 @@
-<repaired_file path="src/utils.js">
 // src/utils.js
 /**
- * Shared constants and math helpers for MagicCloneJS.
- * Defines game rules, card types, and utility functions.
+ * Shared utilities for MagicCloneJS, including mana system, card logic, and game constants.
  */
 
-// ===== GAME CONSTANTS =====
+// === GAME CONSTANTS ===
 const GameConstants = {
   // Mana costs (color combinations)
   MANA_COSTS: {
@@ -20,6 +18,8 @@ const GameConstants = {
     RED_GREEN: { MANA: 4, COLOR: 'RG' },
     // Neutral mana (e.g., 1Mana)
     NEUTRAL: { MANA: 1, COLOR: 'N' },
+    // Default mana pool (4 mana per turn)
+    DEFAULT_MANA_POOL: 4,
   },
 
   // Card types (Magic: The Gathering standard)
@@ -31,157 +31,212 @@ const GameConstants = {
     'Sorcery',
     'Planeswalker',
     'Land',
+    'Legendary',
+    'Basic',
   ],
 
-  // SVG template for card rendering
-  SVG_TEMPLATE: `
-    <svg width="100" height="150" viewBox="0 0 100 150">
-      <rect x="5" y="5" width="90" height="140" fill="#f0f0f0" rx="5" />
-      <text x="50" y="30" text-anchor="middle" font-size="12" fill="#333">Card Name</text>
-      <text x="50" y="50" text-anchor="middle" font-size="10" fill="#666">Type: Creature</text>
-      <text x="50" y="70" text-anchor="middle" font-size="10" fill="#666">Mana: 2</text>
-    </svg>
-  `,
+  // Card mana requirements (tap costs)
+  TAP_COSTS: {
+    CREATURE: 1,
+    ARTIFACT: 0,
+    ENCHANTMENT: 1,
+    INSTANT: 0,
+    SORCERY: 0,
+    PLANESWALKER: 1,
+    LAND: 1,
+    LEGENDARY: 1,
+    BASIC: 0,
+  },
 
-  // Health points (default for creatures)
-  DEFAULT_HEALTH: 3,
+  // SVG templates for card rendering
+  SVG_TEMPLATES: {
+    CREATURE: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="90" height="80" fill="none" stroke="black" stroke-width="2"/>
+      <text x="50" y="50" font-family="Arial" font-size="8" text-anchor="middle" fill="black">🐾</text>
+      <text x="50" y="70" font-family="Arial" font-size="6" text-anchor="middle" fill="black">${(card.name || '').substring(0, 2)}</text>
+    </svg>`,
+    ARTIFACT: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="90" height="80" fill="none" stroke="black" stroke-width="2"/>
+      <text x="50" y="50" font-family="Arial" font-size="8" text-anchor="middle" fill="black">🔧</text>
+      <text x="50" y="70" font-family="Arial" font-size="6" text-anchor="middle" fill="black">${(card.name || '').substring(0, 2)}</text>
+    </svg>`,
+    LAND: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="90" height="80" fill="none" stroke="black" stroke-width="2"/>
+      <text x="50" y="50" font-family="Arial" font-size="8" text-anchor="middle" fill="black">🌍</text>
+      <text x="50" y="70" font-family="Arial" font-size="6" text-anchor="middle" fill="black">${(card.name || '').substring(0, 2)}</text>
+    </svg>`,
+    // Add more templates for other card types as needed
+  },
 };
 
-// ===== MANA SYSTEM =====
+// === MANA SYSTEM CLASS ===
 class ManaSystem {
-  constructor(manaPool = 0) {
+  constructor(manaPool = GameConstants.DEFAULT_MANA_POOL) {
     this.manaPool = manaPool;
-    this.manaCosts = GameConstants.MANA_COSTS;
+    this.manaUsed = 0;
+    this.manaGenerated = 0;
+    this.manaHistory = [];
   }
 
   /**
-   * Calculate mana cost for a card based on its color requirements.
-   * @param {string[]} cardColors - Array of color strings (e.g., ['W', 'B']).
-   * @returns {number} Total mana cost.
+   * Check if a card can be played with current mana pool
+   * @param {Object} card - Card object with manaCost property
+   * @returns {boolean} - True if card can be played
    */
-  calculateCost(cardColors) {
-    let cost = 0;
-    const uniqueColors = [...new Set(cardColors)];
+  canPlayCard(card) {
+    if (!card.manaCost) return false;
 
-    uniqueColors.forEach(color => {
-      const manaCost = this.manaCosts[color]?.MANA || 0;
-      cost += manaCost;
+    // Calculate required mana based on mana costs
+    const requiredMana = this.calculateManaCost(card.manaCost);
+    return this.manaPool >= requiredMana;
+  }
+
+  /**
+   * Calculate mana cost based on color combinations
+   * @param {Object} manaCost - Object with color and mana properties
+   * @returns {number} - Total mana cost
+   */
+  calculateManaCost(manaCost) {
+    let totalMana = 0;
+    for (const color in manaCost) {
+      totalMana += manaCost[color].MANA;
+    }
+    return totalMana;
+  }
+
+  /**
+   * Play a card and deduct mana
+   * @param {Object} card - Card object with manaCost property
+   * @returns {boolean} - True if card was played successfully
+   */
+  playCard(card) {
+    if (!this.canPlayCard(card)) return false;
+
+    const requiredMana = this.calculateManaCost(card.manaCost);
+    this.manaUsed += requiredMana;
+    this.manaPool -= requiredMana;
+    this.manaHistory.push({
+      action: 'play',
+      card,
+      manaUsed: requiredMana,
+      remainingMana: this.manaPool,
     });
 
-    return cost;
+    return true;
   }
 
   /**
-   * Check if player can afford a card.
-   * @param {number} manaCost - Mana cost of the card.
-   * @returns {boolean} True if mana pool >= cost.
+   * Tap a card (costs 1 mana per turn)
+   * @param {Object} card - Card object with tapCost property
+   * @returns {boolean} - True if card was tapped successfully
    */
-  canAfford(manaCost) {
-    return this.manaPool >= manaCost;
+  tapCard(card) {
+    if (!card.tapCost || card.tapCost === 0) return false;
+
+    if (this.manaPool < 1) return false;
+
+    this.manaUsed += 1;
+    this.manaPool -= 1;
+    this.manaHistory.push({
+      action: 'tap',
+      card,
+      manaUsed: 1,
+      remainingMana: this.manaPool,
+    });
+
+    return true;
   }
 
   /**
-   * Spend mana from the pool.
-   * @param {number} manaCost - Mana to spend.
-   * @returns {boolean} True if successful.
+   * Reset mana pool to default (4 mana)
    */
-  spendMana(manaCost) {
-    if (this.manaPool >= manaCost) {
-      this.manaPool -= manaCost;
-      return true;
-    }
-    return false;
+  resetManaPool() {
+    this.manaPool = GameConstants.DEFAULT_MANA_POOL;
+    this.manaUsed = 0;
+    this.manaHistory = [];
   }
 
   /**
-   * Calculate mana cost for combined colors (e.g., 'WB' for White-Black).
-   * @param {string} combinedColor - Combined color string (e.g., 'WB').
-   * @returns {number} Mana cost for the combined color.
+   * Get current mana pool
+   * @returns {number} - Current mana pool
    */
-  calculateCombinedColorCost(combinedColor) {
-    return this.manaCosts[combinedColor]?.MANA || 0;
+  getManaPool() {
+    return this.manaPool;
   }
 
   /**
-   * Validate mana cost for a card with combined colors.
-   * @param {string[]} cardColors - Array of color strings (e.g., ['W', 'B']).
-   * @returns {boolean} True if mana cost can be calculated correctly.
+   * Get mana history
+   * @returns {Array} - Array of mana history entries
    */
-  validateManaCost(cardColors) {
-    const uniqueColors = [...new Set(cardColors)];
-    const combinedColor = uniqueColors.join('');
-
-    // Check if combined color exists in manaCosts
-    const combinedCost = this.manaCosts[combinedColor]?.MANA || 0;
-    const individualCost = uniqueColors.reduce((sum, color) => sum + (this.manaCosts[color]?.MANA || 0), 0);
-
-    return combinedCost === individualCost;
+  getManaHistory() {
+    return [...this.manaHistory];
   }
 }
 
-// ===== CARD CLASS =====
+// === CARD CLASS ===
 class Card {
-  constructor({
-    name,
-    type,
-    manaCost,
-    colors,
-    health = GameConstants.DEFAULT_HEALTH,
-    effects = [],
-  }) {
+  constructor(name, manaCost, type, power = 1, toughness = 1, effects = []) {
     this.name = name;
-    this.type = type;
     this.manaCost = manaCost;
-    this.colors = colors;
-    this.health = health;
+    this.type = type;
+    this.power = power;
+    this.toughness = toughness;
     this.effects = effects;
+    this.tapped = false;
+    this.manaGenerated = 0;
+    this.manaCosts = this.calculateManaCosts();
   }
 
   /**
-   * Apply effects to the card.
-   * @param {Array} effects - Array of effect objects.
+   * Calculate mana costs for the card based on type
+   * @returns {Object} - Object with mana costs for each color
    */
-  applyEffects(effects) {
-    this.effects.push(...effects);
+  calculateManaCosts() {
+    const costs = {};
+    if (this.type === 'Creature' || this.type === 'Planeswalker') {
+      costs.WHITE = { MANA: 1, COLOR: 'W' };
+      costs.BLACK = { MANA: 1, COLOR: 'B' };
+    } else if (this.type === 'Artifact') {
+      costs.NEUTRAL = { MANA: 1, COLOR: 'N' };
+    } else if (this.type === 'Land') {
+      costs.NEUTRAL = { MANA: 1, COLOR: 'N' };
+    } else {
+      // Default to single color mana cost
+      costs.WHITE = { MANA: 1, COLOR: 'W' };
+    }
+    return costs;
   }
 
   /**
-   * Render card as SVG.
-   * @returns {string} SVG string representation.
+   * Render card as SVG
+   * @returns {string} - SVG representation of the card
    */
   renderSVG() {
-    const svgTemplate = GameConstants.SVG_TEMPLATE;
-    const manaText = `Mana: ${this.manaCost}`;
-    const healthText = `Health: ${this.health}`;
-
-    return svgTemplate
-      .replace('Card Name', this.name)
-      .replace('Type:', `Type: ${this.type}`)
-      .replace('Mana:', manaText)
-      .replace('Health:', healthText);
+    const typeKey = this.type.toLowerCase();
+    const template = GameConstants.SVG_TEMPLATES[typeKey] || this.renderDefaultSVG();
+    return template;
   }
 
   /**
-   * Calculate mana cost for the card based on its colors.
-   * @returns {number} Total mana cost.
+   * Default SVG rendering if template not found
+   * @returns {string} - Default SVG representation
    */
-  calculateCardManaCost() {
-    return this.manaSystem.calculateCost(this.colors);
+  renderDefaultSVG() {
+    return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="5" width="90" height="80" fill="none" stroke="black" stroke-width="2"/>
+      <text x="50" y="50" font-family="Arial" font-size="8" text-anchor="middle" fill="black">🎲</text>
+      <text x="50" y="70" font-family="Arial" font-size="6" text-anchor="middle" fill="black">${this.name.substring(0, 2)}</text>
+    </svg>`;
   }
 
   /**
-   * Validate card mana cost against its stored manaCost.
-   * @returns {boolean} True if mana cost matches.
+   * Tap the card (costs 1 mana)
    */
-  validateManaCost() {
-    return this.manaCost === this.calculateCardManaCost();
+  tap() {
+    this.tapped = true;
+    this.manaGenerated = 1; // Generates 1 mana when tapped
   }
 }
 
-// ===== EXPORTS =====
-module.exports = {
-  ManaSystem,
-  Card,
-  GameConstants,
-};
-</repaired_file>
+// Export all required classes and constants
+export { ManaSystem, Card, GameConstants };
